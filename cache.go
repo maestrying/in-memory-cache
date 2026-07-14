@@ -128,3 +128,30 @@ func (c *Cache[K, V]) Cleanup() {
 		}
 	}
 }
+
+// Exists checks whether the key exists and is not expired
+func (c *Cache[K, V]) Exists(key K) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	value, ok := c.items[key]
+
+	return ok && time.Now().Before(value.expiresAt)
+}
+
+// Keys returns a slice of keys that exist and are not expired
+func (c *Cache[K, V]) Keys() []K {
+	actualKeys := make([]K, 0)
+	now := time.Now()
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for key, value := range c.items {
+		if now.Before(value.expiresAt) {
+			actualKeys = append(actualKeys, key)
+		}
+	}
+
+	return actualKeys
+}
