@@ -6,10 +6,17 @@ import (
 	"time"
 )
 
+var (
+	ErrInvalidInterval = errors.New("cleanupInterval must be greater than zero")
+	ErrInvalidMaxSize  = errors.New("maxSize must be greater than zero")
+	ErrCacheFull       = errors.New("cache size is full")
+)
+
 // Cache is a thread-safe in-memory key-value cache with TTL support
 type Cache[K comparable, V any] struct {
 	mu        sync.RWMutex
 	items     map[K]item[V]
+	maxSize   int
 	stopCh    chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
@@ -21,22 +28,34 @@ type item[V any] struct {
 	expiresAt time.Time
 }
 
-// New creates an empty cache
-func New[K comparable, V any]() *Cache[K, V] {
-	return &Cache[K, V]{
-		items: make(map[K]item[V]),
-	}
-}
-
-// NewWithAutoCleanup creates an empty cache and starts a background cleanup goroutine
-func NewWithAutoCleanup[K comparable, V any](cleanupInterval time.Duration) (*Cache[K, V], error) {
-	if cleanupInterval <= 0 {
-		return nil, errors.New("cleanupInterval must be greater than zero")
+// New creates an empty cache with the given maximum size
+func New[K comparable, V any](maxSize int) (*Cache[K, V], error) {
+	if maxSize <= 0 {
+		return nil, ErrInvalidMaxSize
 	}
 
 	c := &Cache[K, V]{
-		items:  make(map[K]item[V]),
-		stopCh: make(chan struct{}),
+		items:   make(map[K]item[V], maxSize),
+		maxSize: maxSize,
+	}
+
+	return c, nil
+}
+
+// NewWithAutoCleanup creates an empty cache with the given maximum size and starts a background cleanup goroutine
+func NewWithAutoCleanup[K comparable, V any](maxSize int, cleanupInterval time.Duration) (*Cache[K, V], error) {
+	if maxSize <= 0 {
+		return nil, ErrInvalidMaxSize
+	}
+
+	if cleanupInterval <= 0 {
+		return nil, ErrInvalidInterval
+	}
+
+	c := &Cache[K, V]{
+		items:   make(map[K]item[V], maxSize),
+		maxSize: maxSize,
+		stopCh:  make(chan struct{}),
 	}
 
 	c.wg.Add(1)
@@ -72,15 +91,36 @@ func (c *Cache[K, V]) Close() {
 }
 
 // Set stores a value by key and associates it with the provided TTL.
-// If the key already exists, Set overwrites its value and expiration time
-func (c *Cache[K, V]) Set(key K, value V, ttl time.Duration) {
+// If the key already exists, Set overwrites its value and expiration time.
+// If the cache is full, Set returns ErrCacheFull
+func (c *Cache[K, V]) Set(key K, value V, ttl time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
+
+	if _, ok := c.items[key]; ok {
+		c.items[key] = item[V]{
+			value:     value,
+			expiresAt: now.Add(ttl),
+		}
+		return nil
+	}
+
+	if len(c.items) >= c.maxSize {
+		c.cleanupLocked(now)
+
+		if len(c.items) >= c.maxSize {
+			return ErrCacheFull
+		}
+	}
+
 	c.items[key] = item[V]{
 		value:     value,
-		expiresAt: time.Now().Add(ttl),
+		expiresAt: now.Add(ttl),
 	}
+
+	return nil
 }
 
 // Get returns the value associated with the key if it exists and has not expired.
@@ -120,11 +160,7 @@ func (c *Cache[K, V]) Cleanup() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for key, item := range c.items {
-		if now.After(item.expiresAt) {
-			delete(c.items, key)
-		}
-	}
+	c.cleanupLocked(now)
 }
 
 // Exists checks whether the key exists and is not expired
@@ -152,4 +188,14 @@ func (c *Cache[K, V]) Keys() []K {
 	}
 
 	return actualKeys
+}
+
+// cleanupLocked removes expired items from the cache.
+// The caller must hold c.mu
+func (c *Cache[K, V]) cleanupLocked(now time.Time) {
+	for key, item := range c.items {
+		if now.After(item.expiresAt) {
+			delete(c.items, key)
+		}
+	}
 }

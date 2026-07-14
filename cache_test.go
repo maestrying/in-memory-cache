@@ -1,6 +1,7 @@
 package ttlcache
 
 import (
+	"errors"
 	"reflect"
 	"sort"
 	"sync"
@@ -9,7 +10,10 @@ import (
 )
 
 func TestCacheSetGet(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Set("user:1", "Maxim", time.Minute)
 
@@ -24,7 +28,10 @@ func TestCacheSetGet(t *testing.T) {
 }
 
 func TestCacheSetOverwriteValue(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](2)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Set("user:1", "Max", time.Minute)
 	cache.Set("user:1", "Ivan", time.Minute)
@@ -40,7 +47,10 @@ func TestCacheSetOverwriteValue(t *testing.T) {
 }
 
 func TestCacheSetUpdatesTTL(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Set("session:1", "token", 20*time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
@@ -55,6 +65,21 @@ func TestCacheSetUpdatesTTL(t *testing.T) {
 
 	if value != "token" {
 		t.Fatalf("expected %q, got %q", "token", value)
+	}
+}
+
+func TestNewRejectsInvalidMaxSize(t *testing.T) {
+	cache, err := New[string, string](0)
+	if err == nil {
+		if cache != nil {
+			t.Fatal("expected cache to be nil on error")
+		}
+
+		t.Fatal("expected error for invalid max size")
+	}
+
+	if err != ErrInvalidMaxSize {
+		t.Fatalf("expected %v, got %v", ErrInvalidMaxSize, err)
 	}
 }
 
@@ -97,7 +122,10 @@ func TestCacheGetReturnsFalseForUnavailableKeys(t *testing.T) {
 		tt := tt
 
 		t.Run(tt.name, func(t *testing.T) {
-			cache := New[string, string]()
+			cache, err := New[string, string](1)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			tt.setup(cache)
 
@@ -109,8 +137,113 @@ func TestCacheGetReturnsFalseForUnavailableKeys(t *testing.T) {
 	}
 }
 
+func TestCacheSetReturnsErrCacheFullWhenCacheIsFull(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := cache.Set("user:1", "Maxim", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	err = cache.Set("user:2", "Ivan", time.Minute)
+	if err != ErrCacheFull {
+		t.Fatalf("expected %v, got %v", ErrCacheFull, err)
+	}
+
+	value, ok := cache.Get("user:1")
+	if !ok {
+		t.Fatal("expected existing key to remain in cache")
+	}
+
+	if value != "Maxim" {
+		t.Fatalf("expected %q, got %q", "Maxim", value)
+	}
+}
+
+func TestCacheSetUpdatesExistingKeyWhenCacheIsFull(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := cache.Set("user:1", "Max", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := cache.Set("user:1", "Ivan", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	value, ok := cache.Get("user:1")
+	if !ok {
+		t.Fatal("expected key to exist")
+	}
+
+	if value != "Ivan" {
+		t.Fatalf("expected %q, got %q", "Ivan", value)
+	}
+}
+
+func TestCacheSetUsesFreedSpaceAfterDelete(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := cache.Set("user:1", "Maxim", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cache.Delete("user:1")
+
+	if err := cache.Set("user:2", "Ivan", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	value, ok := cache.Get("user:2")
+	if !ok {
+		t.Fatal("expected user:2 to exist")
+	}
+
+	if value != "Ivan" {
+		t.Fatalf("expected %q, got %q", "Ivan", value)
+	}
+}
+
+func TestCacheSetUsesFreedSpaceAfterCleanup(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := cache.Set("user:1", "Maxim", 10*time.Millisecond); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	cache.Cleanup()
+
+	if err := cache.Set("user:2", "Ivan", time.Minute); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	value, ok := cache.Get("user:2")
+	if !ok {
+		t.Fatal("expected user:2 to exist")
+	}
+
+	if value != "Ivan" {
+		t.Fatalf("expected %q, got %q", "Ivan", value)
+	}
+}
+
 func TestCacheDelete(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Set("user:1", "Maxim", time.Minute)
 	cache.Delete("user:1")
@@ -122,7 +255,10 @@ func TestCacheDelete(t *testing.T) {
 }
 
 func TestCacheDeleteMissingKey(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Delete("missing")
 
@@ -133,7 +269,10 @@ func TestCacheDeleteMissingKey(t *testing.T) {
 }
 
 func TestCacheCleanupExpiredItems(t *testing.T) {
-	cache := New[string, string]()
+	cache, err := New[string, string](3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	cache.Set("user:1", "Maxim", 10*time.Millisecond)
 	cache.Set("user:2", "Lisa", 10*time.Millisecond)
@@ -164,9 +303,12 @@ func TestCacheCleanupExpiredItems(t *testing.T) {
 }
 
 func TestCacheConcurrentAccess(t *testing.T) {
-	cache := New[int, int]()
-
 	const workers = 100
+
+	cache, err := New[int, int](workers)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
@@ -195,7 +337,11 @@ func TestCacheConcurrentAccess(t *testing.T) {
 }
 
 func TestNewWithAutoCleanupRejectsInvalidInterval(t *testing.T) {
-	cache, err := NewWithAutoCleanup[string, string](0)
+	cache, err := NewWithAutoCleanup[string, string](1, 0)
+	if errors.Is(err, ErrInvalidMaxSize) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	if err == nil {
 		if cache != nil {
 			cache.Close()
@@ -205,7 +351,7 @@ func TestNewWithAutoCleanupRejectsInvalidInterval(t *testing.T) {
 }
 
 func TestCacheAutoCleanupRemovesExpiredItems(t *testing.T) {
-	cache, err := NewWithAutoCleanup[string, string](5 * time.Millisecond)
+	cache, err := NewWithAutoCleanup[string, string](1, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -225,7 +371,7 @@ func TestCacheAutoCleanupRemovesExpiredItems(t *testing.T) {
 }
 
 func TestCacheCloseIsIdempotent(t *testing.T) {
-	cache, err := NewWithAutoCleanup[string, string](5 * time.Millisecond)
+	cache, err := NewWithAutoCleanup[string, string](1, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -295,7 +441,10 @@ func TestCacheExists(t *testing.T) {
 		tt := tt
 
 		t.Run(tt.name, func(t *testing.T) {
-			cache := New[string, string]()
+			cache, err := New[string, string](1)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			tt.setup(cache)
 
@@ -304,6 +453,36 @@ func TestCacheExists(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tt.want, ok)
 			}
 		})
+	}
+}
+
+func TestNewWithAutoCleanupRejectsInvalidMaxSize(t *testing.T) {
+	cache, err := NewWithAutoCleanup[string, string](0, time.Second)
+	if err == nil {
+		if cache != nil {
+			t.Fatal("expected cache to be nil on error")
+		}
+
+		t.Fatal("expected error for invalid max size")
+	}
+
+	if err != ErrInvalidMaxSize {
+		t.Fatalf("expected %v, got %v", ErrInvalidMaxSize, err)
+	}
+}
+
+func TestNewWithAutoCleanupRejectsInvalidCleanupInterval(t *testing.T) {
+	cache, err := NewWithAutoCleanup[string, string](1, 0)
+	if err == nil {
+		if cache != nil {
+			t.Fatal("expected cache to be nil on error")
+		}
+
+		t.Fatal("expected error for invalid cleanup interval")
+	}
+
+	if err != ErrInvalidInterval {
+		t.Fatalf("expected %v, got %v", ErrInvalidInterval, err)
 	}
 }
 
@@ -364,7 +543,10 @@ func TestCacheKeys(t *testing.T) {
 		tt := tt
 
 		t.Run(tt.name, func(t *testing.T) {
-			cache := New[string, string]()
+			cache, err := New[string, string](2)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			tt.setup(cache)
 
