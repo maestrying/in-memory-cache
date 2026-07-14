@@ -380,6 +380,15 @@ func TestCacheCloseIsIdempotent(t *testing.T) {
 	cache.Close()
 }
 
+func TestCacheCloseWithoutAutoCleanupDoesNothing(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cache.Close()
+}
+
 func TestCacheExists(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -483,6 +492,27 @@ func TestNewWithAutoCleanupRejectsInvalidCleanupInterval(t *testing.T) {
 
 	if err != ErrInvalidInterval {
 		t.Fatalf("expected %v, got %v", ErrInvalidInterval, err)
+	}
+}
+
+func TestCacheCleanupRemovesItemsExpiringNow(t *testing.T) {
+	cache, err := New[string, string](1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	now := time.Now()
+	cache.items["user:1"] = item[string]{
+		value:     "Maxim",
+		expiresAt: now,
+	}
+
+	cache.mu.Lock()
+	cache.cleanupLocked(now)
+	cache.mu.Unlock()
+
+	if _, ok := cache.items["user:1"]; ok {
+		t.Fatal("expected item expiring now to be removed")
 	}
 }
 

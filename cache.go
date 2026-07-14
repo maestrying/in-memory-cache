@@ -137,7 +137,7 @@ func (c *Cache[K, V]) Get(key K) (V, bool) {
 		return zero, false
 	}
 
-	if time.Now().After(item.expiresAt) {
+	if isExpired(time.Now(), item.expiresAt) {
 		return zero, false
 	}
 
@@ -170,7 +170,7 @@ func (c *Cache[K, V]) Exists(key K) bool {
 
 	value, ok := c.items[key]
 
-	return ok && time.Now().Before(value.expiresAt)
+	return ok && !isExpired(time.Now(), value.expiresAt)
 }
 
 // Keys returns a slice of keys that exist and are not expired
@@ -182,7 +182,7 @@ func (c *Cache[K, V]) Keys() []K {
 	defer c.mu.RUnlock()
 
 	for key, value := range c.items {
-		if now.Before(value.expiresAt) {
+		if !isExpired(now, value.expiresAt) {
 			actualKeys = append(actualKeys, key)
 		}
 	}
@@ -194,8 +194,12 @@ func (c *Cache[K, V]) Keys() []K {
 // The caller must hold c.mu
 func (c *Cache[K, V]) cleanupLocked(now time.Time) {
 	for key, item := range c.items {
-		if now.After(item.expiresAt) {
+		if isExpired(now, item.expiresAt) {
 			delete(c.items, key)
 		}
 	}
+}
+
+func isExpired(now, expiresAt time.Time) bool {
+	return !now.Before(expiresAt)
 }
