@@ -1,6 +1,8 @@
 package ttlcache
 
 import (
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -230,4 +232,150 @@ func TestCacheCloseIsIdempotent(t *testing.T) {
 
 	cache.Close()
 	cache.Close()
+}
+
+func TestCacheExists(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(c *Cache[string, string])
+		key   string
+		want  bool
+	}{
+		{
+			name:  "missing key",
+			setup: func(c *Cache[string, string]) {},
+			key:   "user:1",
+			want:  false,
+		},
+		{
+			name: "existing unexpired key",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", time.Minute)
+			},
+			key:  "user:1",
+			want: true,
+		},
+		{
+			name: "expired key",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", 10*time.Millisecond)
+				time.Sleep(20 * time.Millisecond)
+			},
+			key:  "user:1",
+			want: false,
+		},
+		{
+			name: "zero TTL",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", 0)
+			},
+			key:  "user:1",
+			want: false,
+		},
+		{
+			name: "negative TTL",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", -time.Second)
+			},
+			key:  "user:1",
+			want: false,
+		},
+		{
+			name: "after delete",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", 10*time.Millisecond)
+				c.Delete("user:1")
+			},
+			key:  "user:1",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+
+		t.Run(tt.name, func(t *testing.T) {
+			cache := New[string, string]()
+
+			tt.setup(cache)
+
+			ok := cache.Exists(tt.key)
+			if ok != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, ok)
+			}
+		})
+	}
+}
+
+func TestCacheKeys(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(c *Cache[string, string])
+		want  []string
+	}{
+		{
+			name:  "empty slice for empty cache",
+			setup: func(c *Cache[string, string]) {},
+			want:  []string{},
+		},
+		{
+			name: "returns only active keys",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", time.Minute)
+				c.Set("user:2", "Ivan", time.Minute)
+			},
+			want: []string{"user:1", "user:2"},
+		},
+		{
+			name: "skips expired keys",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", 10*time.Millisecond)
+				c.Set("user:2", "Ivan", time.Minute)
+				time.Sleep(20 * time.Millisecond)
+			},
+			want: []string{"user:2"},
+		},
+		{
+			name: "skips zero TTL keys",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", 0)
+			},
+			want: []string{},
+		},
+		{
+			name: "skips negative TTL keys",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", -time.Second)
+			},
+			want: []string{},
+		},
+		{
+			name: "skips delete keys",
+			setup: func(c *Cache[string, string]) {
+				c.Set("user:1", "Maxim", time.Minute)
+				c.Set("user:2", "Ivan", time.Minute)
+				c.Delete("user:1")
+			},
+			want: []string{"user:2"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+
+		t.Run(tt.name, func(t *testing.T) {
+			cache := New[string, string]()
+
+			tt.setup(cache)
+
+			got := cache.Keys()
+
+			sort.Strings(got)
+			sort.Strings(tt.want)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
 }
