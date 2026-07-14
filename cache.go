@@ -83,12 +83,11 @@ func (c *Cache[K, V]) Set(key K, value V, ttl time.Duration) {
 	}
 }
 
-// Get returns a value by key.
-// If the key does not exist, Get returns false.
-// If the item has expired, Get treats it as missing and removes it from the cache
+// Get returns the value associated with the key if it exists and has not expired.
+// If the key does not exist or the item has expired, Get returns false
 func (c *Cache[K, V]) Get(key K) (V, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
 	item, ok := c.items[key]
 
@@ -99,7 +98,6 @@ func (c *Cache[K, V]) Get(key K) (V, bool) {
 	}
 
 	if time.Now().After(item.expiresAt) {
-		delete(c.items, key)
 		return zero, false
 	}
 
