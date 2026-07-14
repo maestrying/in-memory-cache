@@ -191,3 +191,43 @@ func TestCacheConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestNewWithAutoCleanupRejectsInvalidInterval(t *testing.T) {
+	cache, err := NewWithAutoCleanup[string, string](0)
+	if err == nil {
+		if cache != nil {
+			cache.Close()
+		}
+		t.Fatal("expected error for invalid cleanup interval")
+	}
+}
+
+func TestCacheAutoCleanupRemovesExpiredItems(t *testing.T) {
+	cache, err := NewWithAutoCleanup[string, string](5 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer cache.Close()
+
+	cache.Set("user:1", "Maxim", 10*time.Millisecond)
+
+	time.Sleep(40 * time.Millisecond)
+
+	cache.mu.RLock()
+	_, ok := cache.items["user:1"]
+	cache.mu.RUnlock()
+
+	if ok {
+		t.Fatal("expected expired item to be removed by background cleanup")
+	}
+}
+
+func TestCacheCloseIsIdempotent(t *testing.T) {
+	cache, err := NewWithAutoCleanup[string, string](5 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cache.Close()
+	cache.Close()
+}
